@@ -1,9 +1,10 @@
 // Tone.js rhythm playback engine. Client-side only; synths are created
 // lazily after the first user gesture to satisfy browser autoplay policies.
 //
-// One bar of 4/4 is scheduled on the shared Transport so the metronome and the
-// rhythm hits stay in sync, and a red cursor can be animated by reading the
-// Transport's elapsed seconds (see RhythmStaff / useTransportCursor).
+// Playback layout: a 4-beat metronome count-in, then the one-bar pattern
+// repeated REPEATS times (so the bar is heard twice). Everything is scheduled
+// on the shared Transport; the red cursor is animated by reading the elapsed
+// time and is parked at the start during the count-in (see RhythmQuiz).
 import * as Tone from "tone";
 import type { RhythmEvent } from "./types";
 
@@ -16,56 +17,47 @@ async function ensureStarted() {
   }
 }
 
+const REPEATS = 2;
+
 // ---- Synths ----------------------------------------------------------------
 
-let noteSynth: Tone.MembraneSynth | null = null;
+let cowbell: Tone.MetalSynth | null = null;
 let metroSynth: Tone.Synth | null = null;
-let downNoise: Tone.NoiseSynth | null = null;
-let upNoise: Tone.NoiseSynth | null = null;
-let upFilter: Tone.Filter | null = null;
-let downFilter: Tone.Filter | null = null;
 
 function getSynths() {
-  if (!noteSynth) {
-    // Percussive "タン/タ" hit for Levels 1–2 (and as a fallback).
-    noteSynth = new Tone.MembraneSynth({
-      pitchDecay: 0.01,
-      octaves: 4,
-      envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.1 },
+  if (!cowbell) {
+    // Prominent cowbell-style hit for every rhythm note (down/up undistinguished).
+    cowbell = new Tone.MetalSynth({
+      envelope: { attack: 0.001, decay: 0.1, release: 0.05 },
+      harmonicity: 0.1,
+      modulationIndex: 8,
+      resonance: 2000,
+      octaves: 0.5,
     }).toDestination();
-    noteSynth.volume.value = -6;
+    cowbell.volume.value = -14;
 
-    // Soft metronome click on each beat.
+    // Soft metronome / count-in click.
     metroSynth = new Tone.Synth({
       oscillator: { type: "triangle" },
       envelope: { attack: 0.001, decay: 0.05, sustain: 0, release: 0.05 },
     }).toDestination();
-    metroSynth.volume.value = -20;
-
-    // Guitar-strum-ish bursts for Level 3+: down = darker/louder, up = brighter/softer.
-    downFilter = new Tone.Filter(2600, "lowpass").toDestination();
-    downNoise = new Tone.NoiseSynth({
-      noise: { type: "white" },
-      envelope: { attack: 0.001, decay: 0.12, sustain: 0, release: 0.05 },
-    }).connect(downFilter);
-    downNoise.volume.value = -4;
-
-    upFilter = new Tone.Filter(1800, "highpass").toDestination();
-    upNoise = new Tone.NoiseSynth({
-      noise: { type: "white" },
-      envelope: { attack: 0.001, decay: 0.08, sustain: 0, release: 0.04 },
-    }).connect(upFilter);
-    upNoise.volume.value = -11;
+    metroSynth.volume.value = -16;
   }
-  return { noteSynth: noteSynth!, metroSynth: metroSynth!, downNoise: downNoise!, upNoise: upNoise! };
+  return { cowbell: cowbell!, metroSynth: metroSynth! };
 }
 
 // ---- Playback --------------------------------------------------------------
 
 export interface PlayHandle {
-  /** Absolute AudioContext time (seconds) at which playback starts. */
+  /** Absolute AudioContext time (seconds) at which the count-in starts. */
   startTime: number;
-  /** Total length of the bar in seconds. */
+  /** Length of the count-in (seconds) before the pattern begins. */
+  countInSeconds: number;
+  /** Length of one bar (seconds). */
+  barSeconds: number;
+  /** How many times the pattern repeats. */
+  repeats: number;
+  /** Total length including count-in (seconds). */
   totalSeconds: number;
   /** Stop immediately and clear the transport. */
   stop: () => void;
@@ -78,13 +70,13 @@ export function audioNow(): number {
 
 export interface PlayOptions {
   metronome?: boolean;
-  /** Called (best-effort, via Tone.Draw) when the bar finishes. */
+  /** Called (best-effort, via Tone.Draw) when playback finishes. */
   onEnd?: () => void;
 }
 
 /**
- * Schedule and play one bar of the given rhythm. Returns a handle whose
- * startTime / totalSeconds let the UI animate a position cursor.
+ * Schedule and play: a 4-beat count-in, then the one-bar pattern twice.
+ * Returns a handle whose timing fields let the UI animate the position cursor.
  */
 export async function playRhythm(
   events: RhythmEvent[],
@@ -93,7 +85,7 @@ export async function playRhythm(
   opts: PlayOptions = {}
 ): Promise<PlayHandle> {
   await ensureStarted();
-  const { noteSynth, metroSynth, downNoise, upNoise } = getSynths();
+  const { cowbell, metroSynth } = getSynths();
 
   const transport = Tone.getTransport();
   transport.stop();
@@ -103,35 +95,34 @@ export async function playRhythm(
 
   const spb = 60 / bpm; // seconds per quarter-note beat
   const beatsPerBar = timeSignature[0];
-  const totalSeconds = beatsPerBar * spb;
+  const barSeconds = beatsPerBar * spb;
+  const countInSeconds = beatsPerBar * spb;
+  const totalSeconds = countInSeconds + REPEATS * barSeconds;
+  const metronome = opts.metronome ?? true;
 
-  // Metronome on every beat (downbeat accented).
-  if (opts.metronome) {
-    for (let b = 0; b < beatsPerBar; b++) {
-      transport.schedule((time) => {
-        metroSynth.triggerAttackRelease(b === 0 ? "C6" : "G5", "32n", time);
-      }, b * spb);
-    }
-  }
-
-  // Rhythm hits. A note tied into from the previous event is held, not re-struck.
-  events.forEach((ev, i) => {
-    if (ev.rest) return;
-    if (i > 0 && events[i - 1].tie) return;
-    const at = ev.beat * spb;
+  const click = (offset: number, accent: boolean) => {
     transport.schedule((time) => {
-      if (ev.stroke === "down") {
-        downNoise.triggerAttackRelease("8n", time);
-        noteSynth.triggerAttackRelease("C2", "16n", time);
-      } else if (ev.stroke === "up") {
-        upNoise.triggerAttackRelease("16n", time);
-      } else {
-        // Higher pitch for shorter notes gives a "タン/タ/タカ" feel.
-        const pitch = ev.duration >= 2 ? "C2" : ev.duration >= 1 ? "E2" : "A2";
-        noteSynth.triggerAttackRelease(pitch, "16n", time);
-      }
-    }, at);
-  });
+      metroSynth.triggerAttackRelease(accent ? "C6" : "G5", "32n", time);
+    }, offset);
+  };
+
+  // Count-in: 4 even clicks.
+  for (let b = 0; b < beatsPerBar; b++) click(b * spb, b === 0);
+
+  // Pattern, repeated.
+  for (let r = 0; r < REPEATS; r++) {
+    const barStart = countInSeconds + r * barSeconds;
+    if (metronome) {
+      for (let b = 0; b < beatsPerBar; b++) click(barStart + b * spb, b === 0);
+    }
+    events.forEach((ev, i) => {
+      if (ev.rest) return;
+      if (i > 0 && events[i - 1].tie) return; // tied-into note is held, not re-struck
+      transport.schedule((time) => {
+        cowbell.triggerAttackRelease("A5", "16n", time);
+      }, barStart + ev.beat * spb);
+    });
+  }
 
   // End marker.
   transport.schedule((time) => {
@@ -144,6 +135,9 @@ export async function playRhythm(
 
   return {
     startTime,
+    countInSeconds,
+    barSeconds,
+    repeats: REPEATS,
     totalSeconds,
     stop: () => {
       transport.stop();

@@ -33,11 +33,8 @@ const WHOLE_RY = 6;
 export default function RhythmNotation({ events, beats = 4, cursor, className }: Props) {
   const staffWidth = beats * BEAT_W;
   const W = LEFT + staffWidth + RIGHT;
-  const hasStroke = events.some((e) => e.stroke);
-  const arrowTop = 64;
-  const arrowBottom = 86;
-  const beatNumY = hasStroke ? 104 : 76;
-  const H = hasStroke ? 116 : 88;
+  const beatNumY = 76;
+  const H = 88;
 
   // x of a note's head, given its beat. Whole notes are centered in the bar.
   const headX = (ev: RhythmEvent) => {
@@ -131,11 +128,6 @@ export default function RhythmNotation({ events, beats = 4, cursor, className }:
     }
 
     if (ev.dot) els.push(dot(cx + rx + 5, i));
-
-    // Strum arrow.
-    if (ev.stroke) {
-      els.push(arrow(cx, ev.stroke, arrowTop, arrowBottom, `a${i}`));
-    }
   });
 
   // ---- Beams (groups of 2+) --------------------------------------------------
@@ -209,23 +201,6 @@ function flag(sx: number, topY: number, _n: number, key: string) {
     C ${sx + 11} ${topY + 5}, ${sx + 13} ${topY + 14}, ${sx + 5} ${topY + 21}
     C ${sx + 12} ${topY + 13}, ${sx + 10} ${topY + 6}, ${sx} ${topY + 8} Z`;
   return <path key={key} d={d} fill="currentColor" />;
-}
-
-function arrow(cx: number, dir: "down" | "up", top: number, bottom: number, key: string) {
-  if (dir === "down") {
-    return (
-      <g key={key} stroke="currentColor" strokeWidth={1.8} fill="currentColor">
-        <line x1={cx} y1={top} x2={cx} y2={bottom - 4} />
-        <path d={`M ${cx - 4} ${bottom - 7} L ${cx} ${bottom} L ${cx + 4} ${bottom - 7} Z`} />
-      </g>
-    );
-  }
-  return (
-    <g key={key} stroke="currentColor" strokeWidth={1.8} fill="currentColor" opacity={0.65}>
-      <line x1={cx} y1={bottom} x2={cx} y2={top + 4} />
-      <path d={`M ${cx - 4} ${top + 7} L ${cx} ${top} L ${cx + 4} ${top + 7} Z`} />
-    </g>
-  );
 }
 
 function renderRest(duration: number, cx: number) {

@@ -52,12 +52,20 @@ export default function RhythmQuiz({ level, title, subtitle, questions }: Props)
   const animate = useCallback(() => {
     const h = handleRef.current;
     if (!h) return;
-    const f = (audioNow() - h.startTime) / h.totalSeconds;
-    if (f >= 1) {
-      setCursor(1);
-      return;
+    const elapsed = audioNow() - h.startTime;
+    if (elapsed < h.countInSeconds) {
+      // Count-in: cursor parked at the start, not yet moving.
+      setCursor(0);
+    } else {
+      const t = elapsed - h.countInSeconds;
+      const playSeconds = h.barSeconds * h.repeats;
+      if (t >= playSeconds) {
+        setCursor(1);
+        return;
+      }
+      // Cursor loops once per bar (the pattern repeats h.repeats times).
+      setCursor((t % h.barSeconds) / h.barSeconds);
     }
-    setCursor(Math.max(0, f));
     rafRef.current = requestAnimationFrame(animate);
   }, []);
 

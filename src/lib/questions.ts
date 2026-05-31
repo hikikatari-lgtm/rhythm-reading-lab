@@ -39,7 +39,7 @@ const RQ: Tok = { d: 1, rest: true };
 const DH: Tok = { d: 2, dot: true }; // dotted half = 3 beats
 const DQ: Tok = { d: 1, dot: true }; // dotted quarter = 1.5 beats
 
-const BPM: Record<number, number> = { 1: 80, 2: 88, 3: 96, 4: 100, 5: 92, 6: 104 };
+const BPM: Record<number, number> = { 1: 80, 2: 88, 3: 96, 4: 70, 5: 92, 6: 104 };
 
 function q(
   level: number,
